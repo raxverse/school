@@ -1,3 +1,5 @@
+import TestManager from '@/components/TestManager'
+
 export default function Home() {
   return (
     <div className="space-y-6">
@@ -17,6 +19,8 @@ export default function Home() {
           <p className="text-3xl font-bold text-[#600000]">10</p>
         </div>
       </div>
+
+      <TestManager />
     </div>
   );
 }
