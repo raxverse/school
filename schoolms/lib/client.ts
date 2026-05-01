@@ -1,14 +1,15 @@
-import { createClient as createBrowserClient } from '@supabase/supabase-js'
+import { createClient as createBrowserClient, type SupabaseClient } from '@supabase/supabase-js'
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+let client: SupabaseClient | null = null
 
-if (!supabaseUrl || !supabaseKey) {
-  throw new Error(
-    'Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY. Check .env.local and restart the dev server.'
-  )
-}
-
-export function createClient() {
-  return createBrowserClient(supabaseUrl!, supabaseKey!)
+export function createClient(): SupabaseClient {
+  if (!client) {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+    if (!supabaseUrl || !supabaseKey) {
+      return createBrowserClient('https://placeholder.supabase.co', 'placeholder-key')
+    }
+    client = createBrowserClient(supabaseUrl, supabaseKey)
+  }
+  return client
 }

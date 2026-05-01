@@ -4,141 +4,391 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/client'
 
+type AuthTab = 'email' | 'phone'
+type AuthMode = 'login' | 'signup'
+
 export default function LoginPage() {
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
+  const [authTab, setAuthTab] = useState<AuthTab>('email')
+  const [authMode, setAuthMode] = useState<AuthMode>('login')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [isSignUp, setIsSignUp] = useState(false)
+  const [success, setSuccess] = useState<string | null>(null)
+
+  // Email form
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [fullName, setFullName] = useState('')
+  const [phone, setPhone] = useState('')
+
+  // Phone OTP form
+  const [otpPhone, setOtpPhone] = useState('')
+  const [otpCode, setOtpCode] = useState('')
+  const [otpSent, setOtpSent] = useState(false)
+
   const router = useRouter()
   const supabase = createClient()
 
-  const handleAuth = async (e: React.FormEvent) => {
+  const redirectByRole = async (userId: string) => {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', userId)
+      .maybeSingle()
+
+    const role = (profile as { role: string } | null)?.role || 'student'
+    switch (role) {
+      case 'admin': router.push('/admin'); break
+      case 'teacher': router.push('/teacher'); break
+      default: router.push('/student'); break
+    }
+  }
+
+  const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
     setError(null)
+    setSuccess(null)
 
     try {
-      if (isSignUp) {
-        // Sign Up
+      if (authMode === 'signup') {
+        if (!fullName.trim()) { setError('Full name is required'); setLoading(false); return }
+        if (password.length < 6) { setError('Password must be at least 6 characters'); setLoading(false); return }
+
         const { data, error: signUpError } = await supabase.auth.signUp({
           email,
           password,
+          options: {
+            data: { full_name: fullName, phone: phone || '' },
+          },
         })
 
         if (signUpError) {
-          // Check for rate limit error
           if (signUpError.message.includes('rate limit') || signUpError.message.includes('too many')) {
-            throw new Error('Too many sign-up attempts. Please wait 1 hour or use a different email address.')
+            throw new Error('Too many sign-up attempts. Please wait and try again.')
           }
           throw signUpError
         }
 
-        setEmail('')
-        setPassword('')
-        setError(null)
-        alert('Sign up successful! Please check your email to confirm.')
+        if (data.user && !data.session) {
+          setSuccess('Account created! Check your email to confirm, then sign in.')
+          setAuthMode('login')
+          setPassword('')
+        } else if (data.session && data.user) {
+          await redirectByRole(data.user.id)
+        }
       } else {
-        // Sign In
-        const { data, error: signInError } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        })
-
+        const { data, error: signInError } = await supabase.auth.signInWithPassword({ email, password })
         if (signInError) throw signInError
-
-        // Redirect to dashboard
-        router.push('/')
+        if (data.user) await redirectByRole(data.user.id)
       }
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Authentication failed'
-      setError(errorMessage)
-      console.error('Auth error:', err)
+      setError(err instanceof Error ? err.message : 'Authentication failed')
     } finally {
       setLoading(false)
     }
   }
 
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#FFF8DC] to-[#FFE4B5]">
-      <div className="w-full max-w-md">
-        <div className="bg-white rounded-lg shadow-2xl border-2 border-[#D2B48C] p-8">
-          <h1 className="text-3xl font-bold text-center text-[#800000] mb-2">
-            School Dashboard
-          </h1>
-          <p className="text-center text-[#600000] mb-6">
-            {isSignUp ? 'Create a new account' : 'Sign in to your account'}
-          </p>
+  const handleGoogleLogin = async () => {
+    setLoading(true)
+    setError(null)
+    const { error: oauthError } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+      },
+    })
+    if (oauthError) {
+      setError(oauthError.message)
+      setLoading(false)
+    }
+  }
 
-          {error && (
-            <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded">
-              {error}
+  const handlePhoneOtp = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setLoading(true)
+    setError(null)
+    setSuccess(null)
+
+    try {
+      if (!otpSent) {
+        const { error: otpError } = await supabase.auth.signInWithOtp({ phone: otpPhone })
+        if (otpError) throw otpError
+        setOtpSent(true)
+        setSuccess('OTP sent! Check your phone.')
+      } else {
+        const { data, error: verifyError } = await supabase.auth.verifyOtp({
+          phone: otpPhone,
+          token: otpCode,
+          type: 'sms',
+        })
+        if (verifyError) throw verifyError
+        if (data.user) await redirectByRole(data.user.id)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Phone authentication failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const resetForm = () => {
+    setError(null)
+    setSuccess(null)
+    setOtpSent(false)
+    setOtpCode('')
+  }
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#FFF8DC] to-[#FFE4B5] px-4">
+      <div className="w-full max-w-md">
+        <div className="bg-white rounded-2xl shadow-2xl border border-[#D2B48C] overflow-hidden">
+          {/* Header */}
+          <div className="bg-[#800000] px-8 py-6 text-center">
+            <h1 className="text-2xl font-bold text-white">School Management System</h1>
+            <p className="text-[#FFE4B5] mt-1 text-sm">Sign in to access your dashboard</p>
+          </div>
+
+          {/* Auth Mode Toggle (Login / Sign Up) */}
+          {authTab === 'email' && (
+            <div className="flex border-b border-gray-200">
+              <button
+                onClick={() => { setAuthMode('login'); resetForm() }}
+                className={`flex-1 py-3 text-sm font-semibold transition-colors ${
+                  authMode === 'login'
+                    ? 'text-[#800000] border-b-2 border-[#800000] bg-[#FFF8DC]/50'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                Sign In
+              </button>
+              <button
+                onClick={() => { setAuthMode('signup'); resetForm() }}
+                className={`flex-1 py-3 text-sm font-semibold transition-colors ${
+                  authMode === 'signup'
+                    ? 'text-[#800000] border-b-2 border-[#800000] bg-[#FFF8DC]/50'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                Sign Up
+              </button>
             </div>
           )}
 
-          <form onSubmit={handleAuth} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-[#600000] mb-1">
-                Email Address
-              </label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-4 py-2 border border-[#D2B48C] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#800000] focus:border-transparent"
-                placeholder="your@email.com"
-                required
-                disabled={loading}
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-[#600000] mb-1">
-                Password
-              </label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-2 border border-[#D2B48C] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#800000] focus:border-transparent"
-                placeholder="••••••••"
-                required
-                disabled={loading}
-              />
-            </div>
-
+          {/* Auth Method Tabs */}
+          <div className="flex border-b border-gray-200">
             <button
-              type="submit"
-              disabled={loading}
-              className="w-full bg-[#800000] hover:bg-[#600000] disabled:bg-gray-400 text-white font-semibold py-2 rounded-lg transition-colors duration-200"
+              onClick={() => { setAuthTab('email'); resetForm() }}
+              className={`flex-1 py-2.5 text-xs font-medium transition-colors ${
+                authTab === 'email'
+                  ? 'text-[#800000] border-b-2 border-[#800000]'
+                  : 'text-gray-400 hover:text-gray-600'
+              }`}
             >
-              {loading ? 'Loading...' : isSignUp ? 'Sign Up' : 'Sign In'}
+              Email + Password
             </button>
-          </form>
+            <button
+              onClick={() => { setAuthTab('phone'); resetForm() }}
+              className={`flex-1 py-2.5 text-xs font-medium transition-colors ${
+                authTab === 'phone'
+                  ? 'text-[#800000] border-b-2 border-[#800000]'
+                  : 'text-gray-400 hover:text-gray-600'
+              }`}
+            >
+              Phone OTP
+            </button>
+          </div>
 
-          <div className="mt-6 text-center">
-            <p className="text-[#600000] text-sm">
-              {isSignUp ? 'Already have an account?' : "Don't have an account?"}
-              <button
-                type="button"
-                onClick={() => {
-                  setIsSignUp(!isSignUp)
-                  setError(null)
-                  setEmail('')
-                  setPassword('')
-                }}
-                className="ml-2 text-[#800000] font-semibold hover:underline"
-              >
-                {isSignUp ? 'Sign In' : 'Sign Up'}
-              </button>
-            </p>
+          <div className="p-6">
+            {/* Error / Success Messages */}
+            {error && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
+                {error}
+              </div>
+            )}
+            {success && (
+              <div className="mb-4 p-3 bg-green-50 border border-green-200 text-green-700 rounded-lg text-sm">
+                {success}
+              </div>
+            )}
+
+            {/* Email Auth Form */}
+            {authTab === 'email' && (
+              <form onSubmit={handleEmailAuth} className="space-y-4">
+                {authMode === 'signup' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
+                    <input
+                      type="text"
+                      value={fullName}
+                      onChange={(e) => setFullName(e.target.value)}
+                      className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#800000] focus:border-transparent text-sm"
+                      placeholder="John Doe"
+                      required
+                      disabled={loading}
+                    />
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Email Address</label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#800000] focus:border-transparent text-sm"
+                    placeholder="you@example.com"
+                    required
+                    disabled={loading}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#800000] focus:border-transparent text-sm"
+                    placeholder="Min. 6 characters"
+                    required
+                    minLength={6}
+                    disabled={loading}
+                  />
+                </div>
+
+                {authMode === 'signup' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Phone (optional)</label>
+                    <input
+                      type="tel"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#800000] focus:border-transparent text-sm"
+                      placeholder="+1234567890"
+                      disabled={loading}
+                    />
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full bg-[#800000] hover:bg-[#600000] disabled:bg-gray-400 text-white font-semibold py-2.5 rounded-lg transition-colors duration-200 text-sm"
+                >
+                  {loading ? 'Please wait...' : authMode === 'signup' ? 'Create Account' : 'Sign In'}
+                </button>
+
+                {/* Divider */}
+                <div className="relative my-4">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-gray-200" />
+                  </div>
+                  <div className="relative flex justify-center text-xs">
+                    <span className="bg-white px-2 text-gray-400">or continue with</span>
+                  </div>
+                </div>
+
+                {/* Google OAuth */}
+                <button
+                  type="button"
+                  onClick={handleGoogleLogin}
+                  disabled={loading}
+                  className="w-full flex items-center justify-center gap-3 border border-gray-300 rounded-lg py-2.5 hover:bg-gray-50 transition-colors disabled:opacity-50 text-sm font-medium text-gray-700"
+                >
+                  <svg className="w-5 h-5" viewBox="0 0 24 24">
+                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/>
+                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                  </svg>
+                  Google
+                </button>
+              </form>
+            )}
+
+            {/* Phone OTP Form */}
+            {authTab === 'phone' && (
+              <form onSubmit={handlePhoneOtp} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
+                  <input
+                    type="tel"
+                    value={otpPhone}
+                    onChange={(e) => setOtpPhone(e.target.value)}
+                    className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#800000] focus:border-transparent text-sm"
+                    placeholder="+1234567890"
+                    required
+                    disabled={loading || otpSent}
+                  />
+                </div>
+
+                {otpSent && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">OTP Code</label>
+                    <input
+                      type="text"
+                      value={otpCode}
+                      onChange={(e) => setOtpCode(e.target.value)}
+                      className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#800000] focus:border-transparent text-sm tracking-widest text-center"
+                      placeholder="123456"
+                      required
+                      maxLength={6}
+                      disabled={loading}
+                    />
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full bg-[#800000] hover:bg-[#600000] disabled:bg-gray-400 text-white font-semibold py-2.5 rounded-lg transition-colors duration-200 text-sm"
+                >
+                  {loading ? 'Please wait...' : otpSent ? 'Verify OTP' : 'Send OTP'}
+                </button>
+
+                {otpSent && (
+                  <button
+                    type="button"
+                    onClick={() => { setOtpSent(false); setOtpCode(''); setError(null) }}
+                    className="w-full text-sm text-gray-500 hover:text-gray-700 py-2"
+                  >
+                    Use a different phone number
+                  </button>
+                )}
+
+                {/* Divider */}
+                <div className="relative my-4">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-gray-200" />
+                  </div>
+                  <div className="relative flex justify-center text-xs">
+                    <span className="bg-white px-2 text-gray-400">or continue with</span>
+                  </div>
+                </div>
+
+                {/* Google OAuth */}
+                <button
+                  type="button"
+                  onClick={handleGoogleLogin}
+                  disabled={loading}
+                  className="w-full flex items-center justify-center gap-3 border border-gray-300 rounded-lg py-2.5 hover:bg-gray-50 transition-colors disabled:opacity-50 text-sm font-medium text-gray-700"
+                >
+                  <svg className="w-5 h-5" viewBox="0 0 24 24">
+                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/>
+                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                  </svg>
+                  Google
+                </button>
+              </form>
+            )}
           </div>
         </div>
 
-        <div className="mt-6 text-center text-sm text-[#600000]">
-          <p>Demo credentials (if available):</p>
-          <p className="text-xs mt-2">Create an account to get started</p>
-        </div>
+        <p className="text-center text-xs text-[#600000] mt-4">
+          By signing in, you agree to our Terms of Service
+        </p>
       </div>
     </div>
   )

@@ -58,7 +58,7 @@ export default function TestManager() {
         // Update
         const { error } = await supabase
           .from('test')
-          .update({ name: formData.name, mobile: parseInt(formData.mobile.toString()) })
+          .update({ name: formData.name, mobile: parseInt(formData.mobile.toString()) } as never)
           .eq('id', editingId)
 
         if (error) throw error
@@ -67,7 +67,7 @@ export default function TestManager() {
         // Create
         const { error } = await supabase
           .from('test')
-          .insert([{ name: formData.name, mobile: parseInt(formData.mobile.toString()) }])
+          .insert([{ name: formData.name, mobile: parseInt(formData.mobile.toString()) }] as never)
 
         if (error) throw error
       }
